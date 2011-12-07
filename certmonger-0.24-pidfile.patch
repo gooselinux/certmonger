@@ -1,0 +1,56 @@
+diff --git a/src/main.c b/src/main.c
+index 9c20df3..4cf0164 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -104,6 +104,22 @@ main(int argc, char **argv)
+ 		tevent_set_debug_stderr(ec);
+ 	}
+ 
++	umask(S_IRWXG | S_IRWXO);
++
++	ctx = NULL;
++	i = cm_init(ec, &ctx);
++	if (i != 0) {
++		fprintf(stderr, "Error: %s\n", strerror(i));
++		talloc_free(ec);
++		exit(1);
++	}
++
++	if (cm_tdbus_setup(ec, bus, ctx) != 0) {
++		fprintf(stderr, "Error connecting to D-Bus.\n");
++		talloc_free(ec);
++		exit(1);
++	}
++
+ 	if (pidfile != NULL) {
+ 		pfd = open(pidfile, O_RDWR | O_CREAT,
+ 			   S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+@@ -135,28 +151,6 @@ main(int argc, char **argv)
+ 		pfp = NULL;
+ 	}
+ 
+-	umask(S_IRWXG | S_IRWXO);
+-
+-	ctx = NULL;
+-	i = cm_init(ec, &ctx);
+-	if (i != 0) {
+-		fprintf(stderr, "Error: %s\n", strerror(i));
+-		talloc_free(ec);
+-		if ((pidfile != NULL) && (pfp != NULL)) {
+-			fclose(pfp);
+-		}
+-		exit(1);
+-	}
+-
+-	if (cm_tdbus_setup(ec, bus, ctx) != 0) {
+-		fprintf(stderr, "Error connecting to D-Bus.\n");
+-		talloc_free(ec);
+-		if ((pidfile != NULL) && (pfp != NULL)) {
+-			fclose(pfp);
+-		}
+-		exit(1);
+-	}
+-
+ 	if (dofork) {
+ 		pid = fork();
+ 		switch (pid) {

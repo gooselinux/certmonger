@@ -1,0 +1,52 @@
+diff --git a/src/certmonger.init.in b/src/certmonger.init.in
+index 0a41c98..97b5b3c 100755
+--- a/src/certmonger.init.in
++++ b/src/certmonger.init.in
+@@ -25,10 +25,10 @@ pidfile=/var/run/certmonger.pid
+ lockfile=/var/lock/subsys/certmonger
+ 
+ if [ -f /etc/rc.d/init.d/functions ]; then
+-	. /etc/rc.d/init.d/functions
++        . /etc/rc.d/init.d/functions
+ fi
+ if [ -f /etc/sysconfig/certmonger ]; then
+-	. /etc/sysconfig/certmonger
++        . /etc/sysconfig/certmonger
+ fi
+ 
+ RETVAL=0
+@@ -49,10 +49,14 @@ stop() {
+     RETVAL=$?
+     echo
+     if [ $RETVAL -eq 0 ]; then
+-	rm -f $lockfile
++        rm -f $lockfile
+     fi
+ }
+ 
++mystatusq() {
++    status $program > /dev/null 2> /dev/null
++}
++
+ restart() {
+     stop
+     start
+@@ -61,11 +65,16 @@ restart() {
+ # See how we were called.
+ case "$1" in
+     start)
+-        [ -f $lockfile ] && exit 0
++        if mystatusq ; then
++            touch $lockfile
++            exit 0
++        fi
+         $1
+         ;;
+     stop)
+-        [ -f $lockfile ] || exit 0
++        if ! test -f $pidfile ; then
++            mystatusq || exit 0
++        fi
+         $1
+         ;;
+     restart)
