@@ -1,0 +1,137 @@
+commit 21197492bdbe28adbe5b88c0038e29f01dba4a59
+Author: Nalin Dahyabhai <nalin@dahyabhai.net>
+Date:   Fri Aug 5 17:58:25 2011 -0400
+
+    - if xmlrpc-c's struct xmlrpc_curl_xportparms has a gss_delegate field, set
+      it to TRUE when we're doing Negotiate auth (#727864, #727863, #727866)
+
+diff --git a/configure.ac b/configure.ac
+index 7affce8..b2bda6c 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -143,6 +143,12 @@ AC_MSG_CHECKING(for XMLRPC LIBS)
+ XMLRPC_LIBS=`${XMLRPC_C_CONFIG} client --libs`
+ AC_MSG_RESULT([$XMLRPC_LIBS])
+ AC_SUBST(XMLRPC_LIBS)
++CFLAGS="$CFLAGS $XMLRPC_CFLAGS"
++AC_CHECK_MEMBERS(struct xmlrpc_curl_xportparms.gssapi_delegation,,,
++		 [
++		 #include <xmlrpc-c/client.h>
++		 #include <xmlrpc-c/transport.h>
++		 ])
+ CFLAGS="$savedCFLAGS"
+ 
+ savedCFLAGS="$CFLAGS"
+diff --git a/src/certmaster.c b/src/certmaster.c
+index e1f1086..1780027 100644
+--- a/src/certmaster.c
++++ b/src/certmaster.c
+@@ -150,7 +150,9 @@ main(int argc, char **argv)
+ 		 host,
+ 		 ((port != NULL) && (strlen(port) > 0)) ? ":" : "",
+ 		 port ? port : "");
+-	ctx = cm_submit_x_init(NULL, uri, "wait_for_cert", cainfo, capath, 0);
++	ctx = cm_submit_x_init(NULL, uri, "wait_for_cert", cainfo, capath,
++			       cm_submit_x_negotiate_off,
++			       cm_submit_x_delegate_off);
+ 	if (ctx == NULL) {
+ 		fprintf(stderr, "Error setting up for XMLRPC.\n");
+ 		printf(_("Error setting up for XMLRPC.\n"));
+diff --git a/src/ipa.c b/src/ipa.c
+index c3e6c3d..6dd3b72 100644
+--- a/src/ipa.c
++++ b/src/ipa.c
+@@ -196,7 +196,9 @@ main(int argc, char **argv)
+ 	} else {
+ 		snprintf(uri, sizeof(uri), "https://%s/ipa/xml", host);
+ 	}
+-	ctx = cm_submit_x_init(NULL, uri, "cert_request", cainfo, capath, 1);
++	ctx = cm_submit_x_init(NULL, uri, "cert_request", cainfo, capath,
++			       cm_submit_x_negotiate_on,
++			       cm_submit_x_delegate_on);
+ 	if (ctx == NULL) {
+ 		fprintf(stderr, "Error setting up for XMLRPC.\n");
+ 		printf(_("Error setting up for XMLRPC.\n"));
+diff --git a/src/submit-x.c b/src/submit-x.c
+index 0752452..93832c3 100644
+--- a/src/submit-x.c
++++ b/src/submit-x.c
+@@ -155,7 +155,8 @@ struct cm_submit_x_context {
+ struct cm_submit_x_context *
+ cm_submit_x_init(void *parent, const char *uri, const char *method,
+ 		 const char *cainfo, const char *capath,
+-		 int negotiate)
++		 enum cm_submit_x_opt_negotiate negotiate,
++		 enum cm_submit_x_opt_delegate delegate)
+ {
+ 	struct cm_submit_x_context *ctx;
+ 	ctx = talloc_ptrtype(parent, ctx);
+@@ -176,7 +177,7 @@ cm_submit_x_init(void *parent, const char *uri, const char *method,
+ 			ctx->xenv.fault_code, ctx->xenv.fault_string);
+ 		xmlrpc_env_clean(&ctx->xenv);
+ 	}
+-	if (negotiate) {
++	if (negotiate == cm_submit_x_negotiate_on) {
+ 		xmlrpc_server_info_allow_auth_negotiate(&ctx->xenv,
+ 							ctx->server);
+ 		if (ctx->xenv.fault_occurred) {
+@@ -199,6 +200,12 @@ cm_submit_x_init(void *parent, const char *uri, const char *method,
+ 	memset(&ctx->xparams, 0, sizeof(ctx->xparams));
+ 	ctx->xparams.cainfo = talloc_strdup(ctx, cainfo);
+ 	ctx->xparams.capath = talloc_strdup(ctx, capath);
++#ifdef HAVE_STRUCT_XMLRPC_CURL_XPORTPARMS_GSSAPI_DELEGATION
++	if ((negotiate == cm_submit_x_negotiate_on) &&
++	    (delegate == cm_submit_x_delegate_on)) {
++		ctx->xparams.gssapi_delegation = TRUE;
++	}
++#endif
+ 	(*xmlrpc_curl_transport_ops.create)(&ctx->xenv, 0,
+ 					    PACKAGE_NAME,
+ 					    PACKAGE_VERSION,
+@@ -723,7 +730,12 @@ main(int argc, char **argv)
+ 
+ 	/* Initialize for XML-RPC. */
+ 	ctx = cm_submit_x_init(NULL, uri, method, cainfo, capath,
+-			       k5 || (kpname != NULL) || (ktname != NULL));
++			       k5 || (kpname != NULL) || (ktname != NULL) ?
++			       cm_submit_x_negotiate_on :
++			       cm_submit_x_negotiate_off,
++			       k5 || (kpname != NULL) || (ktname != NULL) ?
++			       cm_submit_x_delegate_on :
++			       cm_submit_x_delegate_off);
+ 	if (ctx == NULL) {
+ 		fprintf(stderr, "Error setting up for XMLRPC.\n");
+ 		return CM_STATUS_UNCONFIGURED;
+diff --git a/src/submit-x.h b/src/submit-x.h
+index fcfddd1..2901ca2 100644
+--- a/src/submit-x.h
++++ b/src/submit-x.h
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2009 Red Hat, Inc.
++ * Copyright (C) 2009,2011 Red Hat, Inc.
+  * 
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -21,11 +21,20 @@
+ int cm_submit_x_make_ccache(const char *ktname, const char *principal);
+ 
+ struct cm_submit_x_context;
++enum cm_submit_x_opt_negotiate {
++	cm_submit_x_negotiate_off,
++	cm_submit_x_negotiate_on
++};
++enum cm_submit_x_opt_delegate {
++	cm_submit_x_delegate_off,
++	cm_submit_x_delegate_on
++};
+ struct cm_submit_x_context *cm_submit_x_init(void *parent, const char *uri,
+ 					     const char *method,
+ 					     const char *cainfo,
+ 					     const char *capath,
+-					     int negotiate);
++					     enum cm_submit_x_opt_negotiate neg,
++					     enum cm_submit_x_opt_delegate del);
+ void cm_submit_x_run(struct cm_submit_x_context *ctx);
+ int cm_submit_x_has_results(struct cm_submit_x_context *ctx);
+ int cm_submit_x_faulted(struct cm_submit_x_context *ctx);

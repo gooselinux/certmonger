@@ -1,0 +1,135 @@
+commit 963a607410486dfb61f0e576d7014ae755ca153e
+Author: Nalin Dahyabhai <nalin@dahyabhai.net>
+Date:   Wed Aug 10 17:56:40 2011 -0400
+
+    - add a -K option to ipa-submit, to just use the current ccache rather
+      than a keytab, which makes it easier to test
+
+diff --git a/src/ipa.c b/src/ipa.c
+index 6dd3b72..fe5b77b 100644
+--- a/src/ipa.c
++++ b/src/ipa.c
+@@ -47,7 +47,7 @@
+ int
+ main(int argc, char **argv)
+ {
+-	int i, c, host_is_uri = 0;
++	int i, c, host_is_uri = 0, make_ccache = TRUE;
+ 	const char *host = NULL, *cainfo = NULL, *capath = NULL;
+ 	const char *ktname = NULL, *kpname = NULL, *args[2];
+ 	char *csr, *p, *q, uri[LINE_MAX], *s, *reqprinc = NULL, *ipaconfig;
+@@ -63,7 +63,7 @@ main(int argc, char **argv)
+ 		reqprinc[strcspn(reqprinc, "\r\n")] = '\0';
+ 	}
+ 
+-	while ((c = getopt(argc, argv, "h:H:C:c:t:k:P:")) != -1) {
++	while ((c = getopt(argc, argv, "h:H:C:c:t:Kk:P:")) != -1) {
+ 		switch (c) {
+ 		case 'h':
+ 			host = optarg;
+@@ -85,6 +85,9 @@ main(int argc, char **argv)
+ 		case 'k':
+ 			kpname = optarg;
+ 			break;
++		case 'K':
++			make_ccache = FALSE;
++			break;
+ 		case 'P':
+ 			reqprinc = optarg;
+ 			break;
+@@ -94,6 +97,7 @@ main(int argc, char **argv)
+ 				"[-H serverUri] "
+ 				"[-c cafile] "
+ 				"[-C capath] "
++				"[-K] "
+ 				"[-t keytab] "
+ 				"[-k submitterPrincipal] "
+ 				"[-P principalOfRequest] "
+@@ -136,6 +140,7 @@ main(int argc, char **argv)
+ 			"[-H serverUri] "
+ 			"[-c cafile] "
+ 			"[-C capath] "
++			"[-K] "
+ 			"[-t keytab] "
+ 			"[-k submitterPrincipal] "
+ 			"[-P principalOfRequest] "
+@@ -159,6 +164,7 @@ main(int argc, char **argv)
+ 			"[-H serverUri] "
+ 			"[-c cafile] "
+ 			"[-C capath] "
++			"[-K] "
+ 			"[-t keytab] "
+ 			"[-k submitterPrincipal] "
+ 			"[-P principalOfRequest] "
+@@ -205,8 +211,9 @@ main(int argc, char **argv)
+ 		return CM_STATUS_UNCONFIGURED;
+ 	}
+ 
+-	/* Setup a ccache. */
+-	if (cm_submit_x_make_ccache(ktname, kpname) != 0) {
++	/* Setup a ccache unless we're told to use the default one. */
++	if (make_ccache &&
++	    (cm_submit_x_make_ccache(ktname, kpname) != 0)) {
+ 		fprintf(stderr, "Error setting up ccache.\n");
+ 		if (ktname == NULL) {
+ 			if (kpname == NULL) {
+diff --git a/src/submit-x.c b/src/submit-x.c
+index 93832c3..b9495ce 100644
+--- a/src/submit-x.c
++++ b/src/submit-x.c
+@@ -622,7 +622,7 @@ cm_submit_x_get_named_s(struct cm_submit_x_context *ctx,
+ int
+ main(int argc, char **argv)
+ {
+-	int i, j, c, ret, k5 = FALSE;
++	int i, j, c, ret, k5 = FALSE, make_ccache = TRUE;
+ 	int64_t i8;
+ 	int32_t i32;
+ 	const char *uri = NULL, *method = NULL, *ktname = NULL, *kpname = NULL;
+@@ -633,7 +633,7 @@ main(int argc, char **argv)
+ 	xmlrpc_bool boo;
+ 
+ 	cm_log_set_method(cm_log_stderr);
+-	while ((c = getopt(argc, argv, "s:m:kt:p:c:")) != -1) {
++	while ((c = getopt(argc, argv, "s:m:kKt:p:c:")) != -1) {
+ 		switch (c) {
+ 		case 's':
+ 			uri = optarg;
+@@ -650,6 +650,9 @@ main(int argc, char **argv)
+ 		case 'k':
+ 			k5 = TRUE;
+ 			break;
++		case 'K':
++			make_ccache = FALSE;
++			break;
+ 		case 'C':
+ 			capath = optarg;
+ 			break;
+@@ -659,7 +662,7 @@ main(int argc, char **argv)
+ 		default:
+ 			fprintf(stderr,
+ 				"Usage: %s [-s serverURI] [-m method] "
+-				"[-k] [-t keytab] [-p principal] "
++				"[-k [-K]] [-t keytab] [-p principal] "
+ 				"[-C capath] [-c cainfo]\n"
+ 				"Examples:\n"
+ 				"           -s http://localhost:51235/\n"
+@@ -675,7 +678,7 @@ main(int argc, char **argv)
+ 	if ((uri == NULL) || (method == NULL)) {
+ 		fprintf(stderr,
+ 			"Usage: %s [-s serverURI] [-m method] "
+-			"[-k] [-t keytab] [-p principal] "
++			"[-k [-K]] [-t keytab] [-p principal] "
+ 			"[-C capath] [-c cainfo]\n"
+ 			"Examples:\n"
+ 			"           -s http://localhost:51235/\n"
+@@ -746,7 +749,8 @@ main(int argc, char **argv)
+ 
+ 	/* Maybe we need a ccache. */
+ 	if (k5 || (kpname != NULL) || (ktname != NULL)) {
+-		if (cm_submit_x_make_ccache(ktname, kpname) == 0) {
++		if (!make_ccache ||
++		    (cm_submit_x_make_ccache(ktname, kpname) == 0)) {
+ 			k5 = TRUE;
+ 		}
+ 	}

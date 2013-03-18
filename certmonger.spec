@@ -1,14 +1,17 @@
 Name:		certmonger
 Version:	0.42
-Release:	1%{?dist}
+Release:	1%{?dist}.2
 Summary:	Certificate status monitor and PKI enrollment client
 
 Group:		System Environment/Daemons
 License:	GPLv3+
 URL:		http://certmonger.fedorahosted.org
 Source0:	http://fedorahosted.org/released/certmonger/certmonger-%{version}.tar.gz
+Patch0:		certmonger-xmlrpc_delegate.patch
+Patch1:		certmonger-no_new_ccache.patch
 BuildRoot:	%(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 
+BuildRequires:	autoconf, automake, gettext-devel
 BuildRequires:	dbus-devel, nspr-devel, nss-devel, openssl-devel
 %if 0%{?fedora} >= 12 || 0%{?rhel} >= 6
 BuildRequires:  libuuid-devel
@@ -45,6 +48,9 @@ system enrolled with a certificate authority (CA) and keeping it enrolled.
 
 %prep
 %setup -q
+%patch0 -p1 -b .xmlrpc_delegate
+%patch1 -p1 -b .no_new_ccache
+autoreconf -f -i
 
 %build
 %configure --with-tmpdir=/var/run/certmonger
@@ -119,6 +125,18 @@ exit 0
 %dir /var/run/certmonger
 
 %changelog
+* Fri Aug 19 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1.2
+- correct some build failures
+
+* Tue Aug 16 2011 Nalin Dahyabhai <nalin@redhat.com>
+- rebuild the configure script after applying the previous round of patches
+
+* Tue Aug 16 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1.1
+- backport support for enabling delegation of GSSAPI credentials when we
+  use Negotiate authentication for XML-RPC (#729804), and backport the
+  option for making the ipa-submit helper use the current ccache, which
+  makes it easier to test
+
 * Wed Apr 13 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1
 - getcert: fix a buffer overrun preparing a request for the daemon when
   there are more parameters to encode than space in the array (#696185)
