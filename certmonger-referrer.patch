@@ -1,0 +1,32 @@
+From 2d1ca57d40a2740fcd9674e6792d907435c8fff5 Mon Sep 17 00:00:00 2001
+From: Rob Crittenden <rcritten@redhat.com>
+Date: Thu, 20 Oct 2011 16:49:22 -0400
+Subject: [PATCH] Use a specially-crafted User-Agent to send a Referer header.
+
+The Referer header is required by IPA to prevent a Cross-Site Request
+Forgery (CSRF) attack.
+---
+ src/submit-x.c |    7 +++++++
+ 1 files changed, 7 insertions(+), 0 deletions(-)
+
+diff --git a/src/submit-x.c b/src/submit-x.c
+index b9495ce..e462c0e 100644
+--- a/src/submit-x.c
++++ b/src/submit-x.c
+@@ -200,6 +200,13 @@ cm_submit_x_init(void *parent, const char *uri, const char *method,
+ 	memset(&ctx->xparams, 0, sizeof(ctx->xparams));
+ 	ctx->xparams.cainfo = talloc_strdup(ctx, cainfo);
+ 	ctx->xparams.capath = talloc_strdup(ctx, capath);
++    
++	/* Use a specially-crafted User-Agent value to pass along a
++	 * Referer header so the request won't be rejected by the remote
++	 * IPA server.
++	 */
++	ctx->xparams.user_agent = talloc_asprintf(ctx, "%s/%s\r\nReferer: %s\r\nX-Original-User-Agent:", PACKAGE_NAME, PACKAGE_VERSION, uri);
++
+ #ifdef HAVE_STRUCT_XMLRPC_CURL_XPORTPARMS_GSSAPI_DELEGATION
+ 	if ((negotiate == cm_submit_x_negotiate_on) &&
+ 	    (delegate == cm_submit_x_delegate_on)) {
+-- 
+1.7.4
+

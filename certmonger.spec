@@ -1,17 +1,36 @@
+%if 0%{?fedora} > 15 || 0%{?rhel} > 6
+%global systemd 1
+%global	sysvinit 0
+%else
+%global systemd 0
+%global	sysvinit 1
+%endif
+
+%if 0%{?fedora} > 14 || 0%{?rhel} > 6
+%global tmpfiles 1
+%else
+%global tmpfiles 0
+%endif
+
+%if 0%{?fedora} > 9 || 0%{?rhel} > 5
+%global sysvinitdir %{_initddir}
+%else
+%global sysvinitdir %{_initrddir}
+%endif
+
 Name:		certmonger
-Version:	0.42
-Release:	1%{?dist}.2
+Version:	0.50
+Release:	3%{?dist}
 Summary:	Certificate status monitor and PKI enrollment client
 
 Group:		System Environment/Daemons
 License:	GPLv3+
 URL:		http://certmonger.fedorahosted.org
 Source0:	http://fedorahosted.org/released/certmonger/certmonger-%{version}.tar.gz
-Patch0:		certmonger-xmlrpc_delegate.patch
-Patch1:		certmonger-no_new_ccache.patch
+Source1:	http://fedorahosted.org/released/certmonger/certmonger-%{version}.tar.gz.sig
+Patch0:		certmonger-referrer.patch
 BuildRoot:	%(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 
-BuildRequires:	autoconf, automake, gettext-devel
 BuildRequires:	dbus-devel, nspr-devel, nss-devel, openssl-devel
 %if 0%{?fedora} >= 12 || 0%{?rhel} >= 6
 BuildRequires:  libuuid-devel
@@ -39,8 +58,23 @@ BuildRequires:	/usr/bin/dos2unix
 # we need a running system bus
 Requires:	dbus
 
+%if %{systemd}
+BuildRequires:	systemd-units
+Requires(post):	systemd-units
+Requires(preun):	systemd-units
+Requires(postun):	systemd-units
+Requires(post):	systemd-sysv
+%endif
+
+%if %{sysvinit}
 Requires(post):	/sbin/chkconfig, /sbin/service
 Requires(preun):	/sbin/chkconfig, /sbin/service
+%endif
+
+%if 0%{?fedora} >= 15
+# Certain versions of libtevent have incorrect internal ABI versions.
+Conflicts: libtevent < 0.9.13
+%endif
 
 %description
 Certmonger is a service which is primarily concerned with getting your
@@ -48,33 +82,29 @@ system enrolled with a certificate authority (CA) and keeping it enrolled.
 
 %prep
 %setup -q
-%patch0 -p1 -b .xmlrpc_delegate
-%patch1 -p1 -b .no_new_ccache
-autoreconf -f -i
+%patch0 -p1 -b .referrer
 
 %build
-%configure --with-tmpdir=/var/run/certmonger
-# For some reason, Fedora's xmlrpc-c-config just tells us about
-# libxmlrpc_client, but in F13 we need all of them.  Workaround.
+%configure \
+%if %{systemd}
+	--enable-systemd \
+%endif
+%if %{sysvinit}
+	--enable-sysvinit=%{sysvinitdir} \
+%endif
+%if %{tmpfiles}
+	--enable-tmpfiles \
+%endif
+	--with-tmpdir=/var/run/certmonger
+# For some reason, some versions of xmlrpc-c-config in Fedora and RHEL just
+# tell us about libxmlrpc_client, but we need more.  Work around.
 make %{?_smp_mflags} XMLRPC_LIBS="-lxmlrpc_client -lxmlrpc_util -lxmlrpc"
 
 %install
 rm -rf $RPM_BUILD_ROOT
 make install DESTDIR=$RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT/%{_localstatedir}/lib/certmonger/{cas,requests}
-%if 0%{?fedora} <= 9 || 0%{?rhel} < 6
-mkdir -p $RPM_BUILD_ROOT/%{_initrddir}
-install -m755 src/certmonger.init $RPM_BUILD_ROOT/%{_initrddir}/certmonger
-%else
-mkdir -p $RPM_BUILD_ROOT/%{_initddir}
-install -m755 src/certmonger.init $RPM_BUILD_ROOT/%{_initddir}/certmonger
-%endif
 install -m755 -d $RPM_BUILD_ROOT/var/run/certmonger
-%if 0%{?fedora} > 14
-install -m755 -d $RPM_BUILD_ROOT/etc/tmpfiles.d
-install -m644 certmonger.tmpfiles $RPM_BUILD_ROOT/etc/tmpfiles.d/certmonger.conf
-%endif
-
 %{find_lang} %{name}
 
 %check
@@ -87,20 +117,54 @@ rm -rf $RPM_BUILD_ROOT
 if test $1 -eq 1 ; then
 	killall -HUP dbus-daemon 2>&1 > /dev/null
 fi
+%if %{systemd}
+if test $1 -eq 1 ; then
+	/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+fi
+%endif
+%if %{sysvinit}
 /sbin/chkconfig --add certmonger
+%endif
 
 %postun
+%if %{systemd}
+/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ] ; then
+	/bin/systemctl try-restart certmonger.service >/dev/null 2>&1 || :
+fi
+%endif
+%if %{sysvinit}
 if test $1 -gt 0 ; then
 	/sbin/service certmonger condrestart 2>&1 > /dev/null
 fi
+%endif
 exit 0
 
 %preun
+%if %{systemd}
+	/bin/systemctl --no-reload disable certmonger.service > /dev/null 2>&1 || :
+	/bin/systemctl stop certmonger.service > /dev/null 2>&1 || :
+%endif
+%if %{sysvinit}
 if test $1 -eq 0 ; then
 	/sbin/service certmonger stop 2>&1 > /dev/null
 	/sbin/chkconfig --del certmonger
 fi
+%endif
 exit 0
+
+%if %{systemd}
+%triggerun -- certmonger < 0.43
+# Save the current service runlevel info, in case the user wants to apply
+# the enabled status manually later, by running
+#   "systemd-sysv-convert --apply certmonger".
+%{_bindir}/systemd-sysv-convert --save certmonger >/dev/null 2>&1 ||:
+# Do this because the old package's %%postun doesn't know we need to do it.
+/sbin/chkconfig --del certmonger >/dev/null 2>&1 || :
+# Do this because the old package's %%postun wouldn't have tried.
+/bin/systemctl try-restart certmonger.service >/dev/null 2>&1 || :
+exit 0
+%endif
 
 %files -f %{name}.lang
 %defattr(-,root,root,-)
@@ -109,33 +173,99 @@ exit 0
 %config(noreplace) %{_datadir}/dbus-1/services/*
 %dir %{_sysconfdir}/certmonger
 %config(noreplace) %{_sysconfdir}/certmonger/certmonger.conf
-%if 0%{?fedora} <= 9 || 0%{?rhel} < 6
-%{_initrddir}/certmonger
-%else
-%{_initddir}/certmonger
-%endif
+%dir /var/run/certmonger
 %{_bindir}/*
 %{_sbindir}/certmonger
 %{_mandir}/man*/*
 %{_libexecdir}/%{name}
 %{_localstatedir}/lib/certmonger
-%if 0%{?fedora} > 14
+%if %{sysvinit}
+%{sysvinitdir}/certmonger
+%endif
+%if %{tmpfiles}
 %attr(0644,root,root) %config(noreplace) /etc/tmpfiles.d/certmonger.conf
 %endif
-%dir /var/run/certmonger
+%if %{systemd}
+%config(noreplace) /lib/systemd/system/*
+%endif
 
 %changelog
-* Fri Aug 19 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1.2
-- correct some build failures
+* Tue Nov  1 2011 Nalin Dahyabhai <nalin@redhat.com> 0.50-3
+- tweak the patch for #750617 to handle the case where xmlrpc-c doesn't
+  offer dont_advertise as an option (Rob Crittenden)
 
-* Tue Aug 16 2011 Nalin Dahyabhai <nalin@redhat.com>
-- rebuild the configure script after applying the previous round of patches
+* Tue Nov  1 2011 Nalin Dahyabhai <nalin@redhat.com> 0.50-2
+- incorporate patch from Rob Crittenden to start supplying Referer:
+  headers when we submit XML-RPC requests (#750617)
 
-* Tue Aug 16 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1.1
-- backport support for enabling delegation of GSSAPI credentials when we
-  use Negotiate authentication for XML-RPC (#729804), and backport the
-  option for making the ipa-submit helper use the current ccache, which
-  makes it easier to test
+* Fri Oct 14 2011 Nalin Dahyabhai <nalin@redhat.com> 0.50-1
+- really fix these this time:
+ - getcert: error out when "list -c" finds no matching CA (#743488)
+ - getcert: error out when "list -i" finds no matching request (#743485)
+
+* Wed Oct 12 2011 Nalin Dahyabhai <nalin@redhat.com> 0.49-1
+- when using an NSS database, skip loading the module database (#743042)
+- when using an NSS database, skip loading root certs
+- generate SPKAC values when generating CSRs, though we don't do anything
+  with SPKAC values yet
+- internally maintain and use challenge passwords, if we have them
+- behave better when certificates have shorter lifetimes
+- add/recognize/handle notification type "none"
+- getcert: error out when "list -c" finds no matching CA (#743488)
+- getcert: error out when "list -i" finds no matching request (#743485)
+
+* Thu Sep 29 2011 Nalin Dahyabhai <nalin@redhat.com> 0.48-1
+- don't incorrectly assume that CERT_ImportCerts() returns a NULL-terminated
+  array (#742348)
+
+* Tue Sep 27 2011 Nalin Dahyabhai <nalin@redhat.com> 0.47-1
+- getcert: distinguish between {stat() succeeds but isn't a directory} and
+  {stat() failed} when printing an error message (#739903)
+- getcert resubmit/start-tracking: when we're looking for an existing request
+  by ID, and we don't find one, note that specifically (#741262)
+
+* Mon Aug 29 2011 Stephen Gallagher <sgallagh@redhat.com> - 0.46-1.1
+- Rebuild against fixed libtevent version
+
+* Mon Aug 15 2011 Nalin Dahyabhai <nalin@redhat.com> 0.46-1
+- treat the ability to access keys in an NSS database without using a PIN,
+  when we've been told we need one, as an error (#692766, really this time)
+
+* Thu Aug 11 2011 Nalin Dahyabhai <nalin@redhat.com> 0.45-1
+- modify the systemd .service file to be a proper 'dbus' service (more
+  of #718172)
+
+* Thu Aug 11 2011 Nalin Dahyabhai <nalin@redhat.com> 0.44-1
+- check specifically for cases where a specified token that we need to
+  use just isn't present for whatever reason (#697058)
+
+* Wed Aug 10 2011 Nalin Dahyabhai <nalin@redhat.com> 0.43-1
+- add a -K option to ipa-submit, to use the current ccache, which makes
+  it easier to test
+
+* Fri Aug  5 2011 Nalin Dahyabhai <nalin@redhat.com>
+- if xmlrpc-c's struct xmlrpc_curl_xportparms has a gss_delegate field, set
+  it to TRUE when we're doing Negotiate auth (#727864, #727863, #727866)
+
+* Wed Jul 13 2011 Nalin Dahyabhai <nalin@redhat.com>
+- treat the ability to access keys in an NSS database without using a PIN,
+  when we've been told we need one, as an error (#692766)
+- when handling "getcert resubmit" requests, if we don't have a key yet,
+  make sure we go all the way back to generating one (#694184)
+- getcert: try to clean up tests for NSS and PEM file locations (#699059)
+- don't try to set reconnect-on-exit policy unless we managed to connect
+  to the bus (#712500)
+- handle cases where we specify a token but the storage token isn't
+  known (#699552)
+- getcert: recognize -i and storage options to narrow down which requests
+  the user wants to know about (#698772)
+- output hints when the daemon has startup problems, too (#712075)
+- add flags to specify whether we're bus-activated or not, so that we can
+  exit if we have nothing to do after handling a request received over
+  the bus if some specified amount of time has passed
+- explicitly disallow non-root access in the D-Bus configuration (#712072)
+- migrate to systemd on releases newer than Fedora 15 or RHEL 6 (#718172)
+- fix a couple of incorrect calls to talloc_asprintf() (#721392)
 
 * Wed Apr 13 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1
 - getcert: fix a buffer overrun preparing a request for the daemon when
