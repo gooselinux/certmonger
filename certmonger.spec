@@ -1,23 +1,22 @@
-%{!?_with_check: %global pcheck 0}
-%{?_with_check: %global pcheck 1}
-
 Name:		certmonger
-Version:	0.24
-Release:	4%{?dist}
+Version:	0.42
+Release:	1%{?dist}
 Summary:	Certificate status monitor and PKI enrollment client
 
 Group:		System Environment/Daemons
 License:	GPLv3+
 URL:		http://certmonger.fedorahosted.org
 Source0:	http://fedorahosted.org/released/certmonger/certmonger-%{version}.tar.gz
-Patch0:		certmonger-0.24-pidfile.patch
-Patch1:		certmonger-0.24-initscript.patch
 BuildRoot:	%(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 
 BuildRequires:	dbus-devel, nspr-devel, nss-devel, openssl-devel
+%if 0%{?fedora} >= 12 || 0%{?rhel} >= 6
+BuildRequires:  libuuid-devel
+%else
+BuildRequires:  e2fsprogs-devel
+%endif
 BuildRequires:	libtalloc-devel, libtevent-devel
-BuildRequires:	xmlrpc-c-devel
-%if 0%{?pcheck}
+BuildRequires:	libxml2-devel, xmlrpc-c-devel
 # Required for 'make check':
 #  for diff and cmp
 BuildRequires:	diffutils
@@ -29,7 +28,14 @@ BuildRequires:	mktemp
 BuildRequires:	nss-tools
 #  for openssl
 BuildRequires:	openssl
-%endif
+#  for dbus-launch
+BuildRequires:	/usr/bin/dbus-launch
+#  for dos2unix
+BuildRequires:	/usr/bin/dos2unix
+
+# we need a running system bus
+Requires:	dbus
+
 Requires(post):	/sbin/chkconfig, /sbin/service
 Requires(preun):	/sbin/chkconfig, /sbin/service
 
@@ -39,11 +45,9 @@ system enrolled with a certificate authority (CA) and keeping it enrolled.
 
 %prep
 %setup -q
-%patch0 -p1 -b .pidfile
-%patch1 -p1 -b .initscript
 
 %build
-%configure --with-file-store-dir=%{_localstatedir}/lib/certmonger
+%configure --with-tmpdir=/var/run/certmonger
 # For some reason, Fedora's xmlrpc-c-config just tells us about
 # libxmlrpc_client, but in F13 we need all of them.  Workaround.
 make %{?_smp_mflags} XMLRPC_LIBS="-lxmlrpc_client -lxmlrpc_util -lxmlrpc"
@@ -59,18 +63,24 @@ install -m755 src/certmonger.init $RPM_BUILD_ROOT/%{_initrddir}/certmonger
 mkdir -p $RPM_BUILD_ROOT/%{_initddir}
 install -m755 src/certmonger.init $RPM_BUILD_ROOT/%{_initddir}/certmonger
 %endif
+install -m755 -d $RPM_BUILD_ROOT/var/run/certmonger
+%if 0%{?fedora} > 14
+install -m755 -d $RPM_BUILD_ROOT/etc/tmpfiles.d
+install -m644 certmonger.tmpfiles $RPM_BUILD_ROOT/etc/tmpfiles.d/certmonger.conf
+%endif
 
 %{find_lang} %{name}
 
 %check
-%if 0%{?pcheck}
 make check
-%endif
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
 %post
+if test $1 -eq 1 ; then
+	killall -HUP dbus-daemon 2>&1 > /dev/null
+fi
 /sbin/chkconfig --add certmonger
 
 %postun
@@ -90,6 +100,7 @@ exit 0
 %defattr(-,root,root,-)
 %doc README LICENSE STATUS doc/*.txt
 %config(noreplace) %{_sysconfdir}/dbus-1/system.d/*
+%config(noreplace) %{_datadir}/dbus-1/services/*
 %dir %{_sysconfdir}/certmonger
 %config(noreplace) %{_sysconfdir}/certmonger/certmonger.conf
 %if 0%{?fedora} <= 9 || 0%{?rhel} < 6
@@ -102,8 +113,156 @@ exit 0
 %{_mandir}/man*/*
 %{_libexecdir}/%{name}
 %{_localstatedir}/lib/certmonger
+%if 0%{?fedora} > 14
+%attr(0644,root,root) %config(noreplace) /etc/tmpfiles.d/certmonger.conf
+%endif
+%dir /var/run/certmonger
 
 %changelog
+* Wed Apr 13 2011 Nalin Dahyabhai <nalin@redhat.com> 0.42-1
+- getcert: fix a buffer overrun preparing a request for the daemon when
+  there are more parameters to encode than space in the array (#696185)
+- updated translations: de, es, id, pl, ru, uk
+
+* Mon Apr 11 2011 Nalin Dahyabhai <nalin@redhat.com> 0.41-1
+- read information about the keys we've just generated before proceeding
+  to generating a CSR (part of #694184, part of #695675)
+- when processing a "resubmit" request from getcert, go back to key
+  generation if we don't have keys yet, else go back to CSR generation as
+  before (#694184, #695675)
+- configure with --with-tmpdir=/var/run/certmonger and own /var/run/certmonger
+  (#687899), and add a systemd tmpfiles.d control file for creating
+  /var/run/certmonger on Fedora 15 and later
+- let session instances exit when they get disconnected from the bus
+- use a lock file to make sure there's only one session instance messing
+  around with the user's files at a time
+- fix errors saving certificates to NSS databases when there's already a
+  certificate there with the same nickname (#695672)
+- make key and certificate location output from 'getcert list' more properly
+  translatable (#7)
+
+* Mon Mar 28 2011 Nalin Dahyabhai <nalin@redhat.com> 0.40-1
+- update to 0.40
+  - fix validation check on EKU OIDs in getcert (#691351)
+  - get session bus mode sorted
+  - add a list of recognized EKU values to the getcert-request man page
+
+* Fri Mar 25 2011 Nalin Dahyabhai <nalin@redhat.com> 0.39-1
+- update to 0.39
+  - fix use of an uninitialized variable in the xmlrpc-based submission
+    helpers (#690886)
+
+* Thu Mar 24 2011 Nalin Dahyabhai <nalin@redhat.com> 0.38-1
+- update to 0.38
+  - catch cases where we can't read a PIN file, but we never have to log
+    in to the token to access the private key (more of #688229)
+
+* Tue Mar 22 2011 Nalin Dahyabhai <nalin@redhat.com> 0.37-1
+- update to 0.37
+  - be more careful about checking if we can read a PIN file successfully
+    before we even call an API that might need us to try (#688229)
+  - fix strict aliasing warnings
+
+* Tue Mar 22 2011 Nalin Dahyabhai <nalin@redhat.com> 0.36-1
+- update to 0.36
+  - fix some use-after-free bugs in the daemon (#689776)
+  - fix a copy/paste error in certmonger-ipa-submit(8)
+  - getcert now suppresses error details when not given its new -v option
+    (#683926, more of #681641/#652047)
+  - updated translations
+    - de, es, pl, ru, uk
+    - indonesian translation is now for "id" rather than "in"
+
+* Wed Mar  2 2011 Nalin Dahyabhai <nalin@redhat.com> 0.35.1-1
+- fix a self-test that broke because one-year-from-now is now a day's worth
+  of seconds further out than it was a few days ago
+
+* Mon Feb 14 2011 Nalin Dahyabhai <nalin@redhat.com> 0.35-1
+- update to 0.35
+  - self-test fixes to rebuild properly in mock (#670322)
+
+* Tue Feb 08 2011 Fedora Release Engineering <rel-eng@lists.fedoraproject.org> - 0.34-2
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_15_Mass_Rebuild
+
+* Fri Jan 14 2011 Nalin Dahyabhai <nalin@redhat.com> 0.34-1
+- update to 0.34
+  - explicitly note the number of requests we're tracking in the output of
+    "getcert list" (#652049)
+  - try to offer some suggestions when we get certain specific errors back
+    in "getcert" (#652047)
+  - updated translations
+    - es
+
+* Thu Dec 23 2010 Nalin Dahyabhai <nalin@redhat.com> 0.33-1
+- update to 0.33
+  - new translations
+    - id by Okta Purnama Rahadian!
+  - updated translations
+    - pl, uk
+  - roll up assorted fixes for defects
+
+* Fri Nov 12 2010 Nalin Dahyabhai <nalin@redhat.com> 0.32-2
+- depend on the e2fsprogs libuuid on Fedora and RHEL releases where it's
+  not part of util-linux-ng
+
+* Wed Oct 13 2010 Nalin Dahyabhai <nalin@redhat.com> 0.32-1
+- oops, rfc5280 says we shouldn't be populating unique identifiers, so
+  make it a configuration option and default the behavior to off
+
+* Tue Oct 12 2010 Nalin Dahyabhai <nalin@redhat.com> 0.31-1
+- start populating the optional unique identifier fields in self-signed
+  certificates
+
+* Thu Sep 30 2010 Nalin Dahyabhai <nalin@redhat.com> 0.30-4
+- explicitly require "dbus" to try to ensure we have a running system bus
+  when we get started (#639126)
+
+* Wed Sep 29 2010 jkeating - 0.30-3
+- Rebuilt for gcc bug 634757
+
+* Thu Sep 23 2010 Nalin Dahyabhai <nalin@redhat.com> 0.30-2
+- try to SIGHUP the messagebus daemon at first install so that it'll
+  let us claim our service name if it isn't restarted before we are
+  first started (#636876)
+
+* Wed Aug 25 2010 Nalin Dahyabhai <nalin@redhat.com> 0.30-1
+- update to 0.30
+  - fix errors computing the time at the end of an interval that were
+    caught by self-tests
+
+* Mon Aug 23 2010 Nalin Dahyabhai <nalin@redhat.com> 0.29-1
+- update to 0.29
+  - fix 64-bit cleanliness issue using libdbus
+  - actually include the full set of tests in tarballs
+
+* Tue Aug 17 2010 Nalin Dahyabhai <nalin@redhat.com> 0.28-1
+- update to 0.28
+  - fix self-signing certificate notBefore and notAfter values on 32-bit
+    machines
+
+* Tue Aug 17 2010 Nalin Dahyabhai <nalin@redhat.com> 0.27-1
+- update to 0.27
+  - portability and test fixes
+
+* Fri Aug 13 2010 Nalin Dahyabhai <nalin@redhat.com> 0.26-1
+- update to 0.26
+  - when canceling a submission request that's being handled by a helper,
+    reap the child process's status after killing it (#624120)
+
+* Fri Aug 13 2010 Nalin Dahyabhai <nalin@redhat.com> 0.25-1
+- update to 0.25
+  - new translations
+    - in by Okta Purnama Rahadian!
+  - fix detection of cases where we can't access a private key in an NSS
+    database because we don't have the PIN
+  - teach '*getcert start-tracking' about the -p and -P options which the
+    '*getcert request' commands already understand (#621670), and also
+    the -U, -K, -E, and -D flags
+  - double-check that the nicknames of keys we get back from
+    PK11_ListPrivKeysInSlot() match the desired nickname before accepting
+    them as matches, so that our tests won't all blow up on EL5
+  - fix dynamic addition and removal of CAs implemented through helpers
+
 * Mon Jun 28 2010 Nalin Dahyabhai <nalin@redhat.com> 0.24-4
 - init script: ensure that the subsys lock is created whenever we're called to
   "start" when we're already running (even more of #596719)
